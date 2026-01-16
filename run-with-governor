@@ -1,0 +1,74 @@
+#!/bin/bash
+
+# NAME
+#   ./run-with-governor.sh - temporarily use specific CPU governor while a
+#   command is running
+#
+# SYNOPSIS
+#   run-with-governor GOVERNOR COMMAND [ARGS...]
+#
+# EXAMPLE
+#   run-with-governor performance make -j8
+#
+#   Runs `make -j8` with the CPU governor set to "performance".
+#
+# EXIT STATUS
+#   Exits with the status of COMMAND, or 1 if parameters are wrong GOVERNOR is
+#   invalid.
+#
+# HINT
+#   The sudoers file can be changed to allow cpupower without a sudo password
+#   prompt (at your own risk):
+#
+#   1. Run `sudo visudo`
+#
+#   2. Add the following:
+#      ```
+#      # allow cpupower without password
+#      myusername ALL=(root) NOPASSWD: /usr/bin/cpupower frequency-set -g *
+#      myusername ALL=(root) NOPASSWD: /usr/bin/cpupower ^-c [0-9]+ frequency-set -g .+$
+#      ```
+#
+# ---
+#
+# References:
+#   https://man7.org/linux/man-pages/man1/cpupower.1.html
+#   https://man7.org/linux/man-pages/man5/sudoers.5.html
+#   https://docs.kernel.org/admin-guide/pm/cpufreq.html
+
+set -euo pipefail
+
+die () {
+	echo $@ > /dev/stderr
+	exit 1
+}
+
+if [[ $# -lt 2 ]]; then
+    die "Usage: ${0} [governor] [command]"
+fi
+
+desired_governor=$1
+shift
+
+if ! grep -Fw "${desired_governor}" \
+	/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors >/dev/null;
+then
+    die "Governor doesn't exist"
+fi
+
+declare -A cpus=()
+for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    num=${f//[^0-9]/}
+    cpus["${num}"]=$(cat "${f}")
+done
+
+restore_governor() {
+    for i in "${!cpus[@]}"; do
+        sudo cpupower -c "${i}" frequency-set -g "${cpus[${i}]}" >/dev/null
+    done
+}
+trap restore_governor EXIT
+
+sudo cpupower frequency-set -g "${desired_governor}" >/dev/null
+
+"$@"
